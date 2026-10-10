@@ -4,24 +4,31 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10111b"><title>Movie Narration Studio</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/settings.css">
 </head>
 <body>
   <main class="shell">
     <header class="top"><div class="brandmark">▶</div><div><div class="eyebrow">AI VIDEO WORKSPACE</div><h1>Movie Narration <span>Studio</span></h1><p>Video တင်ပါ · မြန်မာ Narration ထုတ်ပါ · MP4 ပြန်ယူပါ</p></div></header>
-    <section class="hero"><div class="pill"><i></i> MYANMAR AI NARRATION</div><h2>ရုပ်ရှင်ဗီဒီယိုကို<br><em>Movie Recap</em> ပြောင်းလိုက်ပါ</h2><p>AI က ဇာတ်ကွက်ကို လေ့လာပြီး မြန်မာ Narration၊ အသံနဲ့ စာတန်းထိုးပါဝင်တဲ့ MP4 အဖြစ် ပြုလုပ်ပေးမယ်။</p>
-      <div class="steps"><div><b>01</b><span>Upload</span></div><div class="line"></div><div><b>02</b><span>AI Script</span></div><div class="line"></div><div><b>03</b><span>Voice + SRT</span></div><div class="line"></div><div><b>04</b><span>MP4</span></div></div>
+    <section class="hero"><div class="pill"><i></i> MYANMAR AI NARRATION</div><h2>ရုပ်ရှင်ဗီဒီယိုကို<br><em>Movie Recap</em> ပြောင်းလိုက်ပါ</h2><p>AI က ဇာတ်ကွက်တွေကို အချိန်အစဉ်အလိုက် စစ်ဆေးပြီး မြန်မာ Narration ပါတဲ့ MP4 ကို ဖန်တီးပေးမယ်။ မူရင်းအသံနဲ့ စာတန်းထိုးကို ထည့်မှာမဟုတ်ပါ။</p>
+      <div class="steps"><div><b>01</b><span>Upload</span></div><div class="line"></div><div><b>02</b><span>Scene Analysis</span></div><div class="line"></div><div><b>03</b><span>Myanmar Voice</span></div><div class="line"></div><div><b>04</b><span>MP4</span></div></div>
+    </section>
+    <section class="panel" id="settingsPanel">
+      <div class="section-title"><div><span class="num">KEY</span><h3>Gemini API Settings</h3></div><span class="limit" id="keyStatus">စစ်ဆေးနေပါတယ်…</span></div>
+      <p class="settings-help">ကိုယ့် Gemini API Key ကို ဒီ Browser ထဲမှာ သိမ်းပြီး အသုံးပြုနိုင်ပါတယ်။ Key ကို Server Disk ပေါ်မှာ မသိမ်းပါဘူး။ ကိုယ်ပိုင်ဖုန်း/Browser မှာသာ သိမ်းပါ။</p>
+      <label class="field key-field"><span>Gemini API Key</span><input id="apiKey" type="password" autocomplete="off" placeholder="AIza..." spellcheck="false"></label>
+      <div class="key-actions"><button type="button" class="secondary" id="toggleKey">Key ပြ/ဖျောက်</button><button type="button" class="secondary" id="saveKey">ဒီ Browser မှာ သိမ်းမယ်</button><button type="button" class="primary" id="testKey">API စမ်းမယ်</button></div>
+      <p id="keyMessage" class="key-message" aria-live="polite"></p>
     </section>
     <section class="panel">
       <div class="section-title"><div><span class="num">01</span><h3>Video တင်ရန်</h3></div><span class="limit">အများဆုံး 5:30 · 300MB</span></div>
       <form id="uploadForm">
         <label class="dropzone" id="dropzone" for="video"><div class="uploadicon">↑</div><strong id="fileTitle">Video ဖိုင်ကို ရွေးချယ်ပါ</strong><span id="fileInfo">MP4 · MOV · WEBM · MKV · AVI</span><input id="video" name="video" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,.m4v" required></label>
         <div class="fieldrow"><label class="field"><span>🎙 Narration Voice</span><select name="voice" id="voice"><option value="male">ယောကျ်ားအသံ · Thiha</option><option value="female">မိန်းကလေးအသံ · Nilar</option></select></label><label class="field"><span>✦ ပြောပြပုံ</span><select name="narration_style"><option value="cinematic">Cinematic Recap</option><option value="natural">သဘာဝကျတဲ့ ပြောပြပုံ</option></select></label></div>
-        <div class="notice"><b>သတိပြုရန်</b><p>ဒီ Prototype မှာ Gemini API Key လိုအပ်ပါတယ်။ အသံထုတ်လုပ်မှုက Microsoft Edge TTS ရဲ့ Burmese voice ကို အသုံးပြုပါတယ်။ Free quota/voice service ရရှိနိုင်မှု ပြောင်းလဲနိုင်ပါတယ်။</p></div>
+        <div class="notice"><b>သတိပြုရန်</b><p>AI က ဇာတ်ကွက်တွေကို အချိန်အစဉ်အလိုက် စစ်ဆေးပြီး Script ထုတ်ပေးမယ်။ AI က မြင်ကွင်းတချို့ကို မှားယွင်းနားလည်နိုင်သေးတဲ့အတွက် နောက်ဆုံး Video ကို စစ်ဆေးပါ။</p></div>
         <button class="primary" type="submit" id="submitBtn"><span>✦</span> Narration MP4 ဖန်တီးမယ် <span class="arrow">→</span></button>
       </form>
     </section>
-    <section class="panel progress-panel" id="progressPanel" hidden><div class="section-title"><div><span class="num">02</span><h3>လုပ်ဆောင်နေမှု</h3></div><span id="percent">0%</span></div><div class="progress"><div id="progressBar"></div></div><p id="statusText" class="status">စတင်နေပါတယ်…</p><div id="errorBox" class="error" hidden></div><div id="result" hidden class="result"><div class="success-icon">✓</div><h3 id="resultTitle">ပြီးပါပြီ</h3><p>Video ကိုဖွင့်ကြည့်ပြီး ဖုန်းထဲသို့ Download လုပ်နိုင်ပါတယ်။</p><video id="preview" controls playsinline></video><div class="downloads"><a id="downloadVideo" class="primary linkbtn" href="#">⬇ MP4 Download</a><a id="downloadSrt" class="secondary linkbtn" href="#">SRT Subtitle</a><a id="downloadScript" class="secondary linkbtn" href="#">Narration Script</a></div></div></section>
-    <footer><div class="footerlogo">MNS</div><div><strong>Movie Narration Studio</strong><p>Built for Myanmar movie recap creators</p></div><span class="version">BETA 0.1</span></footer>
+    <section class="panel progress-panel" id="progressPanel" hidden><div class="section-title"><div><span class="num">02</span><h3>လုပ်ဆောင်နေမှု</h3></div><span id="percent">0%</span></div><div class="progress"><div id="progressBar"></div></div><p id="statusText" class="status">စတင်နေပါတယ်…</p><div id="errorBox" class="error" hidden></div><div id="result" hidden class="result"><div class="success-icon">✓</div><h3 id="resultTitle">ပြီးပါပြီ</h3><p>မူရင်းအသံနဲ့ Subtitle မပါသော Video ကို ဖွင့်ကြည့်ပြီး Download လုပ်နိုင်ပါတယ်။</p><video id="preview" controls playsinline></video><div class="downloads"><a id="downloadVideo" class="primary linkbtn" href="#">⬇ MP4 Download</a><a id="downloadScript" class="secondary linkbtn" href="#">Narration Script</a></div></div></section>
+    <footer><div class="footerlogo">MNS</div><div><strong>Movie Narration Studio</strong><p>Built for Myanmar movie recap creators</p></div><span class="version">BETA 0.2</span></footer>
   </main><script src="/static/app.js"></script>
 </body></html>
-  
