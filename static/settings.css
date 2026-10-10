@@ -1,1 +1,21 @@
 .settings-help{font-size:12px;color:#b5b8cb;line-height:1.9;margin:-4px 0 14px}.key-field input{width:100%;background:#1b1e2c;border:1px solid #34384b;border-radius:12px;color:#f3f4fb;padding:13px 12px;font:inherit;font-size:13px;outline:none}.key-field input:focus{border-color:#a78bfa}.key-actions{display:grid;grid-template-columns:1fr 1.3fr 1fr;gap:8px;margin-top:12px}.key-actions button{font-size:11px;padding:10px 8px;min-width:0}.key-message{font-size:11px;line-height:1.8;margin:10px 0 0;white-space:pre-wrap}.key-message.good{color:#8ef0c4}.key-message.bad{color:#ffb6c2}@media(max-width:390px){.key-actions{grid-template-columns:1fr 1fr}.key-actions #testKey{grid-column:1/-1}.key-actions button{font-size:12px}}
+
+
+/* Results history */
+.history-panel { margin-top: 18px; }
+.history-help { color: var(--muted, #a7a9bc); line-height: 1.65; }
+.refresh-results { white-space: nowrap; padding: 9px 12px; }
+.results-list { display: grid; gap: 12px; margin-top: 14px; }
+.result-card { border: 1px solid rgba(150,155,190,.22); border-radius: 14px; padding: 14px; background: rgba(255,255,255,.025); }
+.result-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.result-card h4 { margin:0 0 5px; font-size: 1rem; overflow-wrap:anywhere; }
+.result-date { margin:0; color: var(--muted, #a7a9bc); font-size:.82rem; }
+.result-state { color:#6ee7a8; font-size:.82rem; white-space:nowrap; }
+.result-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.result-actions a, .result-actions summary { display:inline-flex; align-items:center; justify-content:center; border-radius:9px; padding:9px 12px; text-decoration:none; font-size:.88rem; cursor:pointer; }
+.result-actions .result-download { background:#7865f5; color:#fff; }
+.result-actions .result-script, .result-actions summary { border:1px solid rgba(150,155,190,.28); color:inherit; }
+.result-preview { margin-top:10px; }
+.result-preview video { display:block; width:100%; max-height:360px; margin-top:10px; border-radius:10px; background:#000; }
+.empty-results { color:var(--muted, #a7a9bc); padding:12px 0; }
+@media (max-width: 480px) { .result-card-head { flex-direction:column; gap:5px; } .result-actions a, .result-actions summary { flex:1; } }
