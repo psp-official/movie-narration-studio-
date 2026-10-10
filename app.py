@@ -28,6 +28,42 @@ def choose_key(header_key: Optional[str]) -> Optional[str]:
     return key or os.getenv('GEMINI_API_KEY')
 
 
+def job_dir(job_id: str) -> Path:
+    return DATA_DIR / 'jobs' / job_id
+
+
+def save_job_metadata(job_id: str) -> None:
+    """Persist safe job status so completed results survive page navigation/reloads."""
+    job = JOBS.get(job_id)
+    if not job:
+        return
+    safe = {k: v for k, v in job.items() if k not in {'api_key', 'key'}}
+    folder = job_dir(job_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    temp = folder / 'job.json.tmp'
+    temp.write_text(json.dumps(safe, ensure_ascii=False), encoding='utf-8')
+    temp.replace(folder / 'job.json')
+
+
+def update_job(job_id: str, **changes) -> None:
+    job = JOBS[job_id]
+    job.update(changes)
+    save_job_metadata(job_id)
+
+
+def read_job_metadata(job_id: str):
+    job = JOBS.get(job_id)
+    if job:
+        return job
+    meta_path = job_dir(job_id) / 'job.json'
+    try:
+        data = json.loads(meta_path.read_text(encoding='utf-8'))
+        JOBS[job_id] = data
+        return data
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 @app.get('/', response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse('index.html', {'request': request})
@@ -119,7 +155,9 @@ async def create_job(
         'id': job_id, 'status': 'queued', 'progress': 2,
         'message': 'Video လက်ခံပြီးပါပြီ။', 'created': time.time(),
         'voice': voice, 'duration': duration,
+        'title': Path(video.filename or 'Movie Narration').stem[:120],
     }
+    save_job_metadata(job_id)
     # The key is passed in memory to this job only; it is not written to disk or returned to the browser.
     asyncio.create_task(process_job(job_id, input_path, voice, narration_style, duration, key))
     return {'job_id': job_id}
@@ -160,7 +198,7 @@ async def process_job(job_id, input_path, voice, style, video_duration, api_key)
     client = None
     uploaded = None
     try:
-        job.update(status='processing', progress=5, message='AI က Video ကို စစ်ဆေးနေပါတယ်…')
+        update_job(job_id, status='processing', progress=5, message='AI က Video ကို စစ်ဆေးနေပါတယ်…')
         client = genai.Client(api_key=api_key)
         uploaded = await asyncio.to_thread(client.files.upload, file=str(input_path))
 
@@ -177,7 +215,7 @@ async def process_job(job_id, input_path, voice, style, video_duration, api_key)
             raise RuntimeError('Video analysis စတင်ဖို့ ကြာလွန်းနေပါတယ်။ နောက်တစ်ကြိမ် ထပ်စမ်းပါ။')
 
         # Pass 1: establish a timestamped, evidence-based scene timeline.
-        job.update(progress=18, message='ဇာတ်ကွက်တွေကို အချိန်အစဉ်အလိုက် စစ်ဆေးနေပါတယ်…')
+        update_job(job_id, progress=18, message='ဇာတ်ကွက်တွေကို အချိန်အစဉ်အလိုက် စစ်ဆေးနေပါတယ်…')
         analysis_prompt = f'''You are a careful film-scene analyst. Analyze this exact uploaded video, whose duration is about {video_duration:.1f} seconds.
 Return ONLY valid JSON with schema {{"timeline":[{{"start":0,"end":8,"visual_facts":"...","characters":"...","action":"...","confidence":"high|medium|low"}}]}}.
 Rules:
@@ -197,7 +235,7 @@ Rules:
         timeline = timeline[:60]
 
         # Pass 2: write narration using the timeline as evidence, not free-form guessing.
-        job.update(progress=30, message='စစ်ဆေးထားတဲ့ ဇာတ်ကွက်အချက်အလက်အပေါ် မူတည်ပြီး Narration ရေးနေပါတယ်…')
+        update_job(job_id, progress=30, message='စစ်ဆေးထားတဲ့ ဇာတ်ကွက်အချက်အလက်အပေါ် မူတည်ပြီး Narration ရေးနေပါတယ်…')
         style_text = 'cinematic and engaging, but factual' if style == 'cinematic' else 'simple, natural spoken Burmese'
         target_words = max(120, int(video_duration * 1.15))
         script_prompt = f'''Write a Burmese-language movie recap voice-over for the same {video_duration:.1f}-second video. Use ONLY the observed timeline notes below as factual evidence.
@@ -234,7 +272,7 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
             raise RuntimeError('AI Narration စာသားမလုံလောက်ပါ။ ထပ်စမ်းကြည့်ပါ။')
         segments = segments[:60]
         texts = [s['text'] for s in segments]
-        job.update(progress=38, message=f'ဇာတ်ကွက်နဲ့ချိတ်ထားတဲ့ Narration {len(texts)} ပိုင်း ရပါပြီ။ မြန်မာအသံဖန်တီးနေပါတယ်…')
+        update_job(job_id, progress=38, message=f'ဇာတ်ကွက်နဲ့ချိတ်ထားတဲ့ Narration {len(texts)} ပိုင်း ရပါပြီ။ မြန်မာအသံဖန်တီးနေပါတယ်…')
 
         voice_name = 'my-MM-ThihaNeural' if voice == 'male' else 'my-MM-NilarNeural'
         audio_parts = []
@@ -243,7 +281,7 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
             await edge_tts.Communicate(text, voice_name, rate='+0%').save(str(mp3))
             audio_parts.append(mp3)
             if i % 5 == 0 or i == len(texts):
-                job.update(progress=38 + int(30 * i / len(texts)), message=f'မြန်မာအသံ ဖန်တီးနေပါတယ်… ({i}/{len(texts)})')
+                update_job(job_id, progress=38 + int(30 * i / len(texts)), message=f'မြန်မာအသံ ဖန်တီးနေပါတယ်… ({i}/{len(texts)})')
 
         concat_file = work / 'concat.txt'
         concat_file.write_text(''.join(f"file '{p.name}'\n" for p in audio_parts), encoding='utf-8')
@@ -269,7 +307,7 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
                  '-t', str(video_duration), str(fitted)], timeout=300)
             final_audio = fitted
 
-        job.update(progress=75, message='မူရင်းအသံနဲ့ စာတန်းမပါဘဲ MP4 ထုတ်နေပါတယ်…')
+        update_job(job_id, progress=75, message='မူရင်းအသံနဲ့ စာတန်းမပါဘဲ MP4 ထုတ်နေပါတယ်…')
         output_path = work / 'movie_narration.mp4'
         # Map only source video + generated narration. Original audio and subtitles are intentionally omitted.
         run([
@@ -280,7 +318,7 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
             '-movflags', '+faststart', str(output_path)
         ], timeout=1800)
         (work / 'narration.txt').write_text('\n\n'.join(texts), encoding='utf-8')
-        job.update(
+        update_job(job_id, 
             status='done', progress=100, message='ပြီးပါပြီ။ မူရင်းအသံနဲ့ Subtitle မပါသော MP4 ကို Download လုပ်နိုင်ပါပြီ။',
             title=data.get('title', 'Movie Narration'),
             video_url=f'/api/jobs/{job_id}/download',
@@ -290,7 +328,7 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
         message = str(exc)
         if api_key:
             message = message.replace(api_key, '[API_KEY]')
-        job.update(status='error', progress=100, message='လုပ်ဆောင်မှု မအောင်မြင်ပါ။', error=message[:700])
+        update_job(job_id, status='error', progress=100, message='လုပ်ဆောင်မှု မအောင်မြင်ပါ။', error=message[:700])
     finally:
         if client and uploaded:
             try:
@@ -299,26 +337,91 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
                 pass
 
 
+@app.get('/api/jobs')
+def list_jobs():
+    """Return completed results from memory and the configured data disk."""
+    jobs_by_id = {}
+    jobs_root = DATA_DIR / 'jobs'
+    if jobs_root.exists():
+        for folder in jobs_root.iterdir():
+            if not folder.is_dir():
+                continue
+            job_id = folder.name
+            meta = read_job_metadata(job_id) or {}
+            output_path = folder / 'movie_narration.mp4'
+            script_path = folder / 'narration.txt'
+            # Older completed outputs may not have metadata; recover them from disk.
+            output_ok = output_path.is_file() and output_path.stat().st_size > 0
+            script_ok = script_path.is_file()
+            created = meta.get('created', output_path.stat().st_mtime if output_path.exists() else folder.stat().st_mtime)
+            if output_ok and script_ok:
+                jobs_by_id[job_id] = {
+                    'id': job_id,
+                    'status': 'done',
+                    'progress': 100,
+                    'message': 'ပြီးပါပြီ။',
+                    'title': meta.get('title') or 'Movie Narration',
+                    'created': created,
+                    'video_url': f'/api/jobs/{job_id}/download',
+                    'script_url': f'/api/jobs/{job_id}/script',
+                }
+            elif meta and meta.get('status') in {'queued', 'processing', 'error'}:
+                jobs_by_id[job_id] = {
+                    'id': job_id,
+                    'status': meta.get('status'),
+                    'progress': meta.get('progress', 0),
+                    'message': meta.get('message', ''),
+                    'title': meta.get('title') or 'Movie Narration',
+                    'created': created,
+                    'video_url': None,
+                    'script_url': None,
+                }
+    # Include currently active jobs even before output files exist.
+    for job_id, job in JOBS.items():
+        if job.get('status') != 'done' and job_id not in jobs_by_id:
+            jobs_by_id[job_id] = {
+                'id': job_id, 'status': job.get('status', 'queued'),
+                'progress': job.get('progress', 0), 'message': job.get('message', ''),
+                'title': job.get('title') or 'လုပ်ဆောင်နေဆဲ Video',
+                'created': job.get('created', time.time()),
+                'video_url': f'/api/jobs/{job_id}/download' if job.get('status') == 'done' else None,
+                'script_url': f'/api/jobs/{job_id}/script' if job.get('status') == 'done' else None,
+            }
+    return sorted(jobs_by_id.values(), key=lambda item: item.get('created', 0), reverse=True)[:30]
+
+
 @app.get('/api/jobs/{job_id}')
 def get_job(job_id: str):
-    job = JOBS.get(job_id)
+    job = read_job_metadata(job_id)
     if not job:
         raise HTTPException(404, 'ဒီအလုပ်ကို မတွေ့ပါ။')
-    return {k: v for k, v in job.items() if k not in {'created', 'voice', 'duration'}}
+    # Recover a completed status when the app restarted but the result files remain.
+    output_path = job_dir(job_id) / 'movie_narration.mp4'
+    script_path = job_dir(job_id) / 'narration.txt'
+    if output_path.is_file() and output_path.stat().st_size > 0 and script_path.is_file():
+        job.update(status='done', progress=100, message='ပြီးပါပြီ။')
+        job.setdefault('video_url', f'/api/jobs/{job_id}/download')
+        job.setdefault('script_url', f'/api/jobs/{job_id}/script')
+        save_job_metadata(job_id)
+    return {k: v for k, v in job.items() if k not in {'created', 'voice', 'duration', 'api_key', 'key'}}
 
 
 @app.get('/api/jobs/{job_id}/download')
 def download_video(job_id: str):
-    job = JOBS.get(job_id)
-    path = DATA_DIR / 'jobs' / job_id / 'movie_narration.mp4'
-    if not job or job.get('status') != 'done' or not path.exists():
-        raise HTTPException(404, 'Video မပြီးသေးပါ။')
+    path = job_dir(job_id) / 'movie_narration.mp4'
+    if not path.is_file() or path.stat().st_size == 0:
+        job = read_job_metadata(job_id)
+        if not job:
+            raise HTTPException(404, 'ဒီ Video ကို မတွေ့ပါ။ Results စာရင်းကို ပြန်ဖွင့်ပါ။')
+        if job.get('status') in {'queued', 'processing'}:
+            raise HTTPException(409, 'Video ကို ထုတ်လုပ်နေဆဲပါ။ Results ထဲက အခြေအနေကို ပြန်စစ်ပါ။')
+        raise HTTPException(404, 'ထုတ်ပြီးသား Video ဖိုင်ကို မတွေ့ပါ။ Render Persistent Disk ရှိ/မရှိ စစ်ဆေးပါ။')
     return FileResponse(path, media_type='video/mp4', filename='movie_narration.mp4')
 
 
 @app.get('/api/jobs/{job_id}/script')
 def download_script(job_id: str):
-    path = DATA_DIR / 'jobs' / job_id / 'narration.txt'
-    if not path.exists():
-        raise HTTPException(404, 'Script မရသေးပါ။')
+    path = job_dir(job_id) / 'narration.txt'
+    if not path.is_file():
+        raise HTTPException(404, 'Script ဖိုင်ကို မတွေ့ပါ။')
     return FileResponse(path, media_type='text/plain; charset=utf-8', filename='myanmar_narration.txt')
