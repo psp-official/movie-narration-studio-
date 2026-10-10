@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: movie-narration-studio
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: movie-narration-data
+      mountPath: /var/data
+      sizeGB: 10
