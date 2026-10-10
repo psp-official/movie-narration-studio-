@@ -213,6 +213,74 @@ def extract_json(text: str):
         raise ValueError('AI က JSON အဖြေမှန် မထုတ်ပေးနိုင်ပါ။ ထပ်စမ်းကြည့်ပါ။')
 
 
+def normalize_narration_segments(raw_segments, timeline, video_duration):
+    """Clamp AI timestamps to observed scene windows and keep segments chronological."""
+    scenes = []
+    for item in timeline if isinstance(timeline, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start = max(0.0, min(float(video_duration), float(item.get('start', 0))))
+            end = max(start, min(float(video_duration), float(item.get('end', video_duration))))
+        except (TypeError, ValueError):
+            continue
+        if end - start >= 0.25:
+            scenes.append({'start': start, 'end': end})
+    scenes.sort(key=lambda x: x['start'])
+    # Remove overlap between AI-estimated scene windows while preserving chronological order.
+    non_overlapping = []
+    for scene in scenes:
+        if non_overlapping and scene['start'] < non_overlapping[-1]['end']:
+            scene['start'] = non_overlapping[-1]['end']
+        if scene['end'] - scene['start'] >= 0.25:
+            non_overlapping.append(scene)
+    scenes = non_overlapping
+    if not scenes:
+        scenes = [{'start': 0.0, 'end': float(video_duration)}]
+
+    clean = []
+    last_scene = 0
+    previous_start = -0.01
+    for seg in raw_segments if isinstance(raw_segments, list) else []:
+        if not isinstance(seg, dict):
+            continue
+        text = str(seg.get('text', '')).strip()
+        if not text:
+            continue
+        try:
+            raw_start = max(0.0, min(float(video_duration), float(seg.get('start', 0))))
+            raw_end = max(raw_start, min(float(video_duration), float(seg.get('end', video_duration))))
+        except (TypeError, ValueError):
+            raw_start, raw_end = 0.0, float(video_duration)
+
+        # Choose the scene with the greatest timestamp overlap; break ties by closeness.
+        candidates = []
+        for idx, scene in enumerate(scenes):
+            overlap = max(0.0, min(raw_end, scene['end']) - max(raw_start, scene['start']))
+            distance = abs(raw_start - scene['start'])
+            candidates.append((overlap, -distance, idx))
+        scene_idx = max(candidates)[2]
+        scene_idx = max(last_scene, scene_idx)
+        scene_idx = min(scene_idx, len(scenes) - 1)
+        scene = scenes[scene_idx]
+        start = max(scene['start'], min(raw_start, scene['end']))
+        end = max(start, min(raw_end, scene['end']))
+        # If AI timestamps barely overlap the matched scene, use the scene window itself.
+        if end - start < 0.8:
+            start, end = scene['start'], scene['end']
+        # Keep order stable and avoid a timestamp moving backwards.
+        start = max(start, previous_start + 0.01)
+        if start >= scene['end']:
+            continue
+        end = max(start, min(end, scene['end'], float(video_duration)))
+        if end - start < 0.35:
+            continue
+        clean.append({'text': text, 'start': start, 'end': end, 'scene_index': scene_idx})
+        previous_start = start
+        last_scene = scene_idx
+    return clean
+
+
 async def process_job(job_id, input_path, voice, style, video_duration, api_key):
     job = JOBS[job_id]
     work = input_path.parent
@@ -240,12 +308,13 @@ async def process_job(job_id, input_path, voice, style, video_duration, api_key)
         analysis_prompt = f'''You are a careful film-scene analyst. Analyze this exact uploaded video, whose duration is about {video_duration:.1f} seconds.
 Return ONLY valid JSON with schema {{"timeline":[{{"start":0,"end":8,"visual_facts":"...","characters":"...","action":"...","confidence":"high|medium|low"}}]}}.
 Rules:
-- Cover the clip from 0 seconds to {video_duration:.1f} seconds in chronological order, with about 15-35 entries for a five-minute clip and fewer for shorter clips.
+- Cover the clip from 0 seconds to {video_duration:.1f} seconds in chronological order, with one entry per meaningful scene/shot change where possible (about 15-35 entries for a five-minute clip and fewer for shorter clips).
 - Use approximate timestamps in seconds; entries must not overlap substantially and should cover the whole clip.
 - Record only things actually visible or clearly inferable from the frames. Describe visible actions, locations, character appearances, and changes in the scene.
 - Never guess names, motives, relationships, backstory, or off-screen events. If uncertain, say unknown/unclear.
 - For fast action, describe only what is clearly visible. Do not invent impacts, weapons, injuries, dialogue, or outcomes.
-- Keep each entry concrete and brief. Do not write the recap narration yet.'''
+- Keep each entry concrete and brief. Do not write the recap narration yet.
+- Use contiguous, non-overlapping time windows; set each start/end to the best estimate of when that visual scene is actually on screen.'''
         analysis_response = await gemini_call_with_retry(
             client.models.generate_content, model=MODEL_NAME, contents=[uploaded, analysis_prompt]
         )
@@ -267,28 +336,17 @@ Requirements:
 - Narrate the visible events in the same order as the timeline. Mention transitions when the scene changes.
 - Never invent names, dialogue, relationships, motives, powers, injuries, deaths, or outcomes not supported by the timeline. If unclear, describe only the visible action.
 - Do not claim that a character says something unless speech is clearly established in the notes. Do not write dialogue quotes.
-- Every narration segment must correspond to the relevant timeline interval. Do not move later events earlier or repeat the same event.
+- Every narration segment must correspond to one specific timeline interval and use timestamps inside that interval. Do not move later events earlier or repeat the same event.
+- Keep each segment short enough to be spoken naturally inside its assigned interval; target roughly 2-3 Burmese spoken words per second, and use fewer words for short scenes. Never let a sentence describe a later scene before it appears.
 - Make around {target_words} Burmese words if the footage supports that much; accuracy matters more than length. Keep the voice-over concise enough to fit the video without unnaturally fast speech.
 Return ONLY valid JSON: {{"title":"short Burmese title","segments":[{{"start":0,"end":8,"text":"one or two natural spoken Burmese sentences describing only that interval"}}]}}.
-Return about 15-35 segments for a five-minute clip, fewer for short clips. Use timestamps from the timeline, in seconds.'''
+Return about 15-35 segments for a five-minute clip, fewer for short clips. Use timestamps from the timeline, in seconds. Prefer one narration segment per timeline entry; do not create overlapping segments.'''
         response = await gemini_call_with_retry(
             client.models.generate_content, model=MODEL_NAME, contents=[script_prompt]
         )
         data = extract_json(response.text or '')
         raw_segments = data.get('segments', [])
-        segments = []
-        for seg in raw_segments if isinstance(raw_segments, list) else []:
-            if not isinstance(seg, dict):
-                continue
-            text = str(seg.get('text', '')).strip()
-            if not text:
-                continue
-            try:
-                start = max(0.0, min(video_duration, float(seg.get('start', 0))))
-                end = max(start, min(video_duration, float(seg.get('end', video_duration))))
-            except (TypeError, ValueError):
-                start, end = 0.0, video_duration
-            segments.append({'text': text, 'start': start, 'end': end})
+        segments = normalize_narration_segments(raw_segments, timeline, video_duration)
         if len(segments) < 3:
             raise RuntimeError('AI Narration စာသားမလုံလောက်ပါ။ ထပ်စမ်းကြည့်ပါ။')
         segments = segments[:60]
@@ -307,13 +365,21 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
             # If the AI gave a meaningful interval, fit speech into it moderately; never silently
             # move a later scene narration to the beginning of the video.
             allotted = end_sec - start_sec
-            if allotted >= 1.0 and part_duration > allotted * 1.08:
-                factor = part_duration / allotted
-                if factor <= 1.65:
-                    fitted_part = work / f'part_{i:03}_fit.mp3'
-                    run(['ffmpeg', '-y', '-i', str(mp3), '-filter:a', f'atempo={factor:.5f}',
-                         '-t', str(allotted), str(fitted_part)], timeout=180)
-                    mp3 = fitted_part
+            if allotted >= 0.8 and part_duration > allotted * 1.05:
+                # Fit each line into its own scene window so it cannot narrate over a later scene.
+                factor = min(2.0, max(1.0, part_duration / allotted))
+                fitted_part = work / f'part_{i:03}_fit.mp3'
+                run(['ffmpeg', '-y', '-i', str(mp3), '-filter:a', f'atempo={factor:.5f},apad',
+                     '-t', str(allotted), str(fitted_part)], timeout=180)
+                mp3 = fitted_part
+            # Schedule segments sequentially; if timestamps touch, keep a tiny safety gap.
+            if track_specs:
+                previous_part, previous_start = track_specs[-1]
+                previous_end = previous_start + probe_duration(previous_part)
+                if start_sec < previous_end:
+                    # Keep chronological audio from overlapping. The narration text has already
+                    # been constrained to the visual interval, so only a small timing correction is made.
+                    start_sec = min(max(start_sec, previous_end + 0.02), max(start_sec, end_sec - 0.35))
             audio_parts.append(mp3)
             track_specs.append((mp3, start_sec))
             if i % 5 == 0 or i == len(segments):
