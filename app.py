@@ -179,6 +179,27 @@ def run(cmd, timeout=None):
     return p.stdout
 
 
+async def gemini_call_with_retry(func, *args, **kwargs):
+    """Retry temporary Gemini overload/rate-limit errors with bounded exponential backoff."""
+    last_error = None
+    for attempt in range(4):
+        try:
+            return await asyncio.to_thread(func, *args, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            message = str(exc).lower()
+            transient = any(token in message for token in (
+                '503', 'unavailable', 'high demand', '429', 'resource_exhausted',
+                'temporarily overloaded', 'internal error', '500'
+            ))
+            if not transient or attempt == 3:
+                raise
+            wait_seconds = min(2 ** attempt, 8)
+            # Keep the job alive and make the retry visible in Results.
+            await asyncio.sleep(wait_seconds)
+    raise last_error
+
+
 def extract_json(text: str):
     text = text.strip()
     text = re.sub(r'^```(?:json)?\s*', '', text)
@@ -225,7 +246,7 @@ Rules:
 - Never guess names, motives, relationships, backstory, or off-screen events. If uncertain, say unknown/unclear.
 - For fast action, describe only what is clearly visible. Do not invent impacts, weapons, injuries, dialogue, or outcomes.
 - Keep each entry concrete and brief. Do not write the recap narration yet.'''
-        analysis_response = await asyncio.to_thread(
+        analysis_response = await gemini_call_with_retry(
             client.models.generate_content, model=MODEL_NAME, contents=[uploaded, analysis_prompt]
         )
         analysis = extract_json(analysis_response.text or '')
@@ -250,7 +271,7 @@ Requirements:
 - Make around {target_words} Burmese words if the footage supports that much; accuracy matters more than length. Keep the voice-over concise enough to fit the video without unnaturally fast speech.
 Return ONLY valid JSON: {{"title":"short Burmese title","segments":[{{"start":0,"end":8,"text":"one or two natural spoken Burmese sentences describing only that interval"}}]}}.
 Return about 15-35 segments for a five-minute clip, fewer for short clips. Use timestamps from the timeline, in seconds.'''
-        response = await asyncio.to_thread(
+        response = await gemini_call_with_retry(
             client.models.generate_content, model=MODEL_NAME, contents=[script_prompt]
         )
         data = extract_json(response.text or '')
@@ -276,36 +297,45 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
 
         voice_name = 'my-MM-ThihaNeural' if voice == 'male' else 'my-MM-NilarNeural'
         audio_parts = []
-        for i, text in enumerate(texts, start=1):
+        track_specs = []
+        for i, segment in enumerate(segments, start=1):
             mp3 = work / f'part_{i:03}.mp3'
-            await edge_tts.Communicate(text, voice_name, rate='+0%').save(str(mp3))
+            await edge_tts.Communicate(segment['text'], voice_name, rate='+0%').save(str(mp3))
+            part_duration = probe_duration(mp3)
+            start_sec = max(0.0, min(video_duration, segment.get('start', 0.0)))
+            end_sec = max(start_sec, min(video_duration, segment.get('end', video_duration)))
+            # If the AI gave a meaningful interval, fit speech into it moderately; never silently
+            # move a later scene narration to the beginning of the video.
+            allotted = end_sec - start_sec
+            if allotted >= 1.0 and part_duration > allotted * 1.08:
+                factor = part_duration / allotted
+                if factor <= 1.65:
+                    fitted_part = work / f'part_{i:03}_fit.mp3'
+                    run(['ffmpeg', '-y', '-i', str(mp3), '-filter:a', f'atempo={factor:.5f}',
+                         '-t', str(allotted), str(fitted_part)], timeout=180)
+                    mp3 = fitted_part
             audio_parts.append(mp3)
-            if i % 5 == 0 or i == len(texts):
-                update_job(job_id, progress=38 + int(30 * i / len(texts)), message=f'မြန်မာအသံ ဖန်တီးနေပါတယ်… ({i}/{len(texts)})')
+            track_specs.append((mp3, start_sec))
+            if i % 5 == 0 or i == len(segments):
+                update_job(job_id, progress=38 + int(30 * i / len(segments)), message=f'မြန်မာအသံဖန်တီးနေပါတယ်… ({i}/{len(segments)})')
 
-        concat_file = work / 'concat.txt'
-        concat_file.write_text(''.join(f"file '{p.name}'\n" for p in audio_parts), encoding='utf-8')
-        narration_audio = work / 'narration.mp3'
-        run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', str(concat_file),
-             '-c:a', 'libmp3lame', '-q:a', '3', str(narration_audio)], timeout=300)
-        audio_duration = probe_duration(narration_audio)
+        # Place each narration segment at its scene timestamp. This reduces the drift caused by
+        # concatenating all speech into one long track without regard to scene boundaries.
+        narration_audio = work / 'narration_timed.m4a'
+        cmd = ['ffmpeg', '-y']
+        for part, _ in track_specs:
+            cmd += ['-i', str(part)]
+        filters = []
+        mix_inputs = []
+        for idx, (_, start_sec) in enumerate(track_specs):
+            delay_ms = int(max(0.0, start_sec) * 1000)
+            filters.append(f'[{idx}:a]adelay={delay_ms}|{delay_ms},apad=pad_dur=0.15[a{idx}]')
+            mix_inputs.append(f'[a{idx}]')
+        filters.append(''.join(mix_inputs) + f'amix=inputs={len(mix_inputs)}:duration=longest:dropout_transition=0,atrim=duration={video_duration}[aout]')
+        cmd += ['-filter_complex', ';'.join(filters), '-map', '[aout]', '-c:a', 'aac', '-b:a', '160k',
+                '-t', str(video_duration), str(narration_audio)]
+        run(cmd, timeout=900)
         final_audio = narration_audio
-        if audio_duration > video_duration:
-            factor = audio_duration / max(video_duration, 0.01)
-            # atempo accepts 0.5..2.0; chain filters for unusually long scripts.
-            factors = []
-            while factor > 2.0:
-                factors.append(2.0)
-                factor /= 2.0
-            while factor < 0.5:
-                factors.append(0.5)
-                factor /= 0.5
-            factors.append(factor)
-            filter_value = ','.join(f'atempo={x:.5f}' for x in factors)
-            fitted = work / 'narration_fitted.mp3'
-            run(['ffmpeg', '-y', '-i', str(narration_audio), '-filter:a', filter_value,
-                 '-t', str(video_duration), str(fitted)], timeout=300)
-            final_audio = fitted
 
         update_job(job_id, progress=75, message='မူရင်းအသံနဲ့ စာတန်းမပါဘဲ MP4 ထုတ်နေပါတယ်…')
         output_path = work / 'movie_narration.mp4'
@@ -328,7 +358,7 @@ Return about 15-35 segments for a five-minute clip, fewer for short clips. Use t
         message = str(exc)
         if api_key:
             message = message.replace(api_key, '[API_KEY]')
-        update_job(job_id, status='error', progress=100, message='လုပ်ဆောင်မှု မအောင်မြင်ပါ။', error=message[:700])
+        update_job(job_id, status='error', progress=100, message='လုပ်ဆောင်မှု မအောင်မြင်ပါ။ မူရင်း Video ကို မဖျက်ထားပါ။ Retry လုပ်နိုင်ပါသည်။', error=message[:700], retryable=True)
     finally:
         if client and uploaded:
             try:
