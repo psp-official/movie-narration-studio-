@@ -13,6 +13,7 @@ const result = document.getElementById('result');
 const apiKeyInput = document.getElementById('apiKey');
 const keyStatus = document.getElementById('keyStatus');
 const keyMessage = document.getElementById('keyMessage');
+const resultsList = document.getElementById('resultsList');
 const KEY_STORAGE = 'mns_gemini_api_key_v1';
 let pollTimer = null;
 let activeJobId = null;
@@ -91,6 +92,64 @@ document.getElementById('testKey').addEventListener('click', async () => {
   }
 });
 
+function makeResultCard(item) {
+  const card = document.createElement('article');
+  card.className = 'result-card';
+  const head = document.createElement('div'); head.className = 'result-card-head';
+  const info = document.createElement('div');
+  const title = document.createElement('h4'); title.textContent = item.title || 'Movie Narration';
+  const date = document.createElement('p'); date.className = 'result-date';
+  date.textContent = item.created ? new Date(item.created * 1000).toLocaleString() : 'အချိန် မသိရပါ';
+  info.append(title, date);
+  const state = document.createElement('span'); state.className = 'result-state';
+  state.textContent = item.status === 'done' ? '✓ ပြီးပါပြီ' : `${item.progress || 0}% · လုပ်ဆောင်နေဆဲ`;
+  head.append(info, state); card.append(head);
+  if (item.status === 'done' && item.video_url) {
+    const actions = document.createElement('div'); actions.className = 'result-actions';
+    const previewWrap = document.createElement('details'); previewWrap.className = 'result-preview';
+    const summary = document.createElement('summary'); summary.textContent = 'ဗီဒီယို ဖွင့်ကြည့်မယ်';
+    const video = document.createElement('video'); video.controls = true; video.playsInline = true;
+    video.preload = 'none'; video.src = item.video_url;
+    previewWrap.append(summary, video);
+    const download = document.createElement('a'); download.className = 'result-download';
+    download.href = item.video_url; download.textContent = '⬇ MP4 Download';
+    download.setAttribute('download', 'movie_narration.mp4');
+    const script = document.createElement('a'); script.className = 'result-script';
+    script.href = item.script_url || `/api/jobs/${encodeURIComponent(item.id)}/script`;
+    script.textContent = 'Narration Script';
+    actions.append(download, script); card.append(actions, previewWrap);
+  } else {
+    const msg = document.createElement('p'); msg.className = 'result-date';
+    msg.textContent = item.status === 'error' ? (item.message || 'လုပ်ဆောင်မှု မအောင်မြင်ပါ။') : (item.message || 'လုပ်ဆောင်နေပါတယ်…');
+    card.append(msg);
+  }
+  return card;
+}
+
+async function loadResults() {
+  if (!resultsList) return;
+  try {
+    const res = await fetch('/api/jobs', { cache: 'no-store' });
+    const items = await res.json();
+    if (!res.ok) throw new Error('Results ကို ဖတ်မရပါ။');
+    resultsList.replaceChildren();
+    if (!Array.isArray(items) || items.length === 0) {
+      const empty = document.createElement('p'); empty.className = 'empty-results';
+      empty.textContent = 'ထုတ်ပြီးသား Video မရှိသေးပါ။ Video တစ်ခုကို အရင်ဖန်တီးပါ။';
+      resultsList.append(empty); return;
+    }
+    items.forEach(item => resultsList.append(makeResultCard(item)));
+  } catch (_) {
+    const empty = document.createElement('p'); empty.className = 'empty-results';
+    empty.textContent = 'Results ကို ယခုဖတ်မရပါ။ ခဏနေ ပြန်စမ်းပါ။';
+    resultsList.replaceChildren(empty);
+  }
+}
+
+document.getElementById('refreshResults')?.addEventListener('click', loadResults);
+window.addEventListener('pageshow', loadResults);
+window.addEventListener('focus', loadResults);
+
 async function poll(id) {
   try {
     const res = await fetch(`/api/jobs/${id}`);
@@ -107,6 +166,7 @@ async function poll(id) {
       document.getElementById('downloadVideo').href = data.video_url;
       document.getElementById('downloadScript').href = data.script_url;
       statusText.textContent = 'အောင်မြင်ပါပြီ။';
+      await loadResults();
       return true;
     }
     if (data.status === 'error') {
@@ -142,6 +202,7 @@ form.addEventListener('submit', async e => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Upload မအောင်မြင်ပါ။');
     activeJobId = data.job_id;
+    await loadResults();
     submitBtn.textContent = 'AI က လုပ်ဆောင်နေပါတယ်…';
     const finished = await poll(activeJobId);
     if (!finished) pollTimer = setInterval(() => { if (activeJobId) poll(activeJobId); }, 3000);
@@ -151,3 +212,6 @@ form.addEventListener('submit', async e => {
     errorBox.hidden = false; errorBox.textContent = err.message || 'အမှားတစ်ခု ဖြစ်နေပါတယ်။';
   }
 });
+
+// Populate completed results on a fresh visit as well as browser Back navigation.
+loadResults();
